@@ -177,15 +177,19 @@ with st.sidebar:
         st.error("No API keys found in .env")
         st.stop()
 
+    # Default to openai if available
+    default_idx = available_providers.index("openai") if "openai" in available_providers else 0
+
     selected_provider = st.radio(
         "Provider",
         options=available_providers,
+        index=default_idx,
         format_func=lambda x: {"claude": "Anthropic Claude", "openai": "OpenAI GPT"}[x],
         label_visibility="collapsed",
     )
 
     # Model override
-    default_models = {"claude": "claude-sonnet-4-20250514", "openai": "gpt-4.1"}
+    default_models = {"claude": "claude-sonnet-4-20250514", "openai": "gpt-4o"}
     model_override = st.text_input(
         "Model override",
         placeholder=default_models[selected_provider],
