@@ -16,6 +16,18 @@ from providers import get_provider, PROVIDERS, ENV_KEYS
 from agent import TeachingAgent
 
 # ---------------------------------------------------------------------------
+# Bridge Streamlit secrets → environment variables
+# (Streamlit Community Cloud injects secrets via st.secrets, not os.environ)
+# ---------------------------------------------------------------------------
+
+for env_var in ENV_KEYS.values():
+    if env_var not in os.environ:
+        try:
+            os.environ[env_var] = st.secrets[env_var]
+        except (KeyError, FileNotFoundError):
+            pass
+
+# ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
 
