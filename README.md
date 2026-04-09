@@ -75,3 +75,9 @@ python agent.py prompts/constructivism/system_prompt.md
 
 # Streamlit UI
 streamlit run app.py
+
+
+
+python script.py data/corpus/constructivism/ -p openai
+python script.py data/socratic -p openai -m gpt-4o
+python script.py data/corpus/scaffolding -p openai -m gpt-4o
