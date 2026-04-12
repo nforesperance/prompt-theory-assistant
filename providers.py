@@ -84,7 +84,7 @@ class ClaudeProvider(LLMProvider):
 
 
 class OpenAIProvider(LLMProvider):
-    """OpenAI GPT-4o / GPT-4.1."""
+    """OpenAI GPT-4o / GPT-4.1 / GPT-5 / o-series."""
 
     def __init__(self, model: str = "gpt-4.1"):
         from openai import OpenAI
@@ -92,14 +92,22 @@ class OpenAIProvider(LLMProvider):
         self.client = OpenAI()
         self.model = model
 
+    def _token_kwarg(self, max_tokens: int) -> dict:
+        """GPT-5 and o-series models require `max_completion_tokens`
+        instead of the legacy `max_tokens` parameter."""
+        m = self.model.lower()
+        if m.startswith(("gpt-5", "o1", "o3", "o4")):
+            return {"max_completion_tokens": max_tokens}
+        return {"max_tokens": max_tokens}
+
     def complete(self, system: str, user: str, *, max_tokens: int = 4096) -> str:
         resp = self.client.chat.completions.create(
             model=self.model,
-            max_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
+            **self._token_kwarg(max_tokens),
         )
         return resp.choices[0].message.content
 
@@ -107,8 +115,8 @@ class OpenAIProvider(LLMProvider):
         msgs = [{"role": "system", "content": system}] + messages
         resp = self.client.chat.completions.create(
             model=self.model,
-            max_tokens=max_tokens,
             messages=msgs,
+            **self._token_kwarg(max_tokens),
         )
         return resp.choices[0].message.content
 
@@ -116,9 +124,9 @@ class OpenAIProvider(LLMProvider):
         msgs = [{"role": "system", "content": system}] + messages
         stream = self.client.chat.completions.create(
             model=self.model,
-            max_tokens=max_tokens,
             messages=msgs,
             stream=True,
+            **self._token_kwarg(max_tokens),
         )
         for chunk in stream:
             delta = chunk.choices[0].delta
