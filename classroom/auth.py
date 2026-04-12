@@ -64,5 +64,5 @@ def login_student(session_code: str, student_id: str) -> str | None:
 
 
 def logout() -> None:
-    for k in ("auth", "agent", "session_id", "messages", "state"):
+    for k in ("auth", "orch", "agent", "session_id", "messages", "state", "theory"):
         st.session_state.pop(k, None)

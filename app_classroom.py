@@ -30,24 +30,10 @@ for _env_var in ENV_KEYS.values():
         except (KeyError, FileNotFoundError):
             pass
 
-from agent import TeachingAgent  # noqa: E402
-from classroom import auth, roster, state, storage  # noqa: E402
-from classroom.router import route as route_theory  # noqa: E402
-from classroom.state import (  # noqa: E402
-    check_safety,
-    initial_state,
-    record_theory_change,
-    render_state_block,
-    update_state,
-)
+from classroom import auth, roster, storage  # noqa: E402
+from classroom.orchestrator import ClassroomOrchestrator  # noqa: E402
 
 PROMPTS_DIR = Path("prompts")
-SUPPORT_MESSAGE = (
-    "I hear that you're going through something difficult. Your wellbeing "
-    "matters more than any lesson right now. Please reach out to a trusted "
-    "adult — a teacher, school counselor, or family member — so you don't "
-    "have to handle this alone."
-)
 
 st.set_page_config(page_title="Teaching Assistant — Classroom", page_icon="🎓", layout="wide")
 storage.init_db()
@@ -288,33 +274,23 @@ def render_student():
     cls = storage.get_class(a["class_id"])
     student = storage.get_student(a["class_id"], a["student_id"])
 
-    # Initialize session on first load
-    if "session_id" not in st.session_state:
-        s_state = initial_state(student)
-        if cls.get("topic"):
-            s_state["session"]["current_topic"] = cls["topic"]
-        s_state["routing"]["current_theory"] = cls["theory"]
-        s_state["routing"]["history"].append({
-            "turn": 0,
-            "theory": cls["theory"],
-            "reason": "session start",
-        })
-        st.session_state["state"] = s_state
-        st.session_state["messages"] = []
-        st.session_state["theory"] = cls["theory"]
-        st.session_state["session_id"] = storage.start_session(
-            a["class_id"], a["student_id"], s_state
+    # Initialize orchestrator once per session
+    if "orch" not in st.session_state:
+        st.session_state["orch"] = ClassroomOrchestrator(
+            llm=get_llm(),
+            class_info=cls,
+            student=student,
+            prompt_loader=load_theory_prompt,
+            theories_provider=available_theories,
         )
-        llm = get_llm()
-        prompt = load_theory_prompt(cls["theory"]) + "\n\n" + render_state_block(s_state)
-        st.session_state["agent"] = TeachingAgent(prompt, llm)
+    orch: ClassroomOrchestrator = st.session_state["orch"]
 
     st.title(f"Hi {a['display_name'].split()[0]}! 👋")
     if cls.get("topic"):
         st.caption(f"Today's topic: **{cls['topic']}**")
 
     # Replay transcript
-    for m in st.session_state["messages"]:
+    for m in orch.messages:
         with st.chat_message(m["role"], avatar="🎓" if m["role"] == "assistant" else None):
             st.write(m["content"])
 
@@ -322,65 +298,22 @@ def render_student():
     if not user_msg:
         return
 
-    llm = get_llm()
-
     # Safety pre-flight
-    safety = check_safety(user_msg, llm)
-    if safety.get("distress"):
-        st.session_state["state"]["safety"]["distress_signals"] = True
+    support = orch.check_safety(user_msg)
+    if support:
         with st.chat_message("user"):
             st.write(user_msg)
         with st.chat_message("assistant", avatar="🎓"):
-            st.warning(SUPPORT_MESSAGE)
-        st.session_state["messages"].append({"role": "user", "content": user_msg})
-        st.session_state["messages"].append({"role": "assistant", "content": SUPPORT_MESSAGE})
-        storage.update_session(
-            st.session_state["session_id"],
-            st.session_state["state"],
-            st.session_state["messages"],
-        )
+            st.warning(support)
+        orch.record_support_turn(user_msg, support)
         return
 
-    # Theory routing — runs only after we have signal (turn >= 2)
-    agent: TeachingAgent = st.session_state["agent"]
-    if st.session_state["state"]["session"]["turn_count"] >= 2:
-        new_theory, reason = route_theory(
-            st.session_state["state"],
-            st.session_state["theory"],
-            available_theories(),
-            llm,
-        )
-        if new_theory != st.session_state["theory"]:
-            st.session_state["theory"] = new_theory
-            st.session_state["state"] = record_theory_change(
-                st.session_state["state"], new_theory, reason
-            )
-
-    # Refresh system prompt with current state block each turn
-    agent.system_prompt = (
-        load_theory_prompt(st.session_state["theory"])
-        + "\n\n"
-        + render_state_block(st.session_state["state"])
-    )
-
+    # Routing + system prompt refresh, then stream the reply
+    orch.prepare_turn()
     with st.chat_message("user"):
         st.write(user_msg)
-
     with st.chat_message("assistant", avatar="🎓"):
-        reply = st.write_stream(agent.stream(user_msg))
-
-    st.session_state["messages"].append({"role": "user", "content": user_msg})
-    st.session_state["messages"].append({"role": "assistant", "content": reply})
-
-    # State update (best-effort, non-blocking on error)
-    st.session_state["state"] = update_state(
-        st.session_state["state"], user_msg, reply, llm
-    )
-    storage.update_session(
-        st.session_state["session_id"],
-        st.session_state["state"],
-        st.session_state["messages"],
-    )
+        st.write_stream(orch.stream_reply(user_msg))
 
 
 # ─── Shared sidebar (provider selection) ───────────────────────────────────
