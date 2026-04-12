@@ -248,6 +248,24 @@ PROMPT_BUILDER_SYSTEM = textwrap.dedent("""\
     10. End with a META-COGNITION section instructing the agent to reflect
         on whether its responses align with the theory.
 
+    CONVERSATION CONSTRAINTS (theory-agnostic — always include verbatim as
+    its own section titled "CONVERSATION CONSTRAINTS", placed immediately
+    before ANTI-PATTERNS):
+    - Ask AT MOST ONE question per turn. Never stack multiple questions in
+      a single response, even if several would be pedagogically relevant.
+    - Wait for the learner's reply before escalating scaffolding, shifting
+      topic, or introducing a new prompt.
+    - Keep each turn concise — roughly what a learner can read in ~15
+      seconds. Prefer a single focused move over a thorough multi-part one.
+    - One idea per turn: either ask a question, OR give feedback, OR offer
+      a hint — not a combination.
+
+    EXAMPLE FORMATTING RULE: In the EXAMPLE CONVERSATIONAL MOVES section,
+    every agent turn MUST contain exactly one question or one short
+    statement. Never write an example where the agent asks two questions
+    or mixes feedback with a question. The examples are few-shot anchors
+    and the agent will imitate them literally.
+
     Write the prompt in a clear, structured format using markdown headers.
     It should be self-contained – an LLM reading only this prompt should
     fully understand how to behave.
