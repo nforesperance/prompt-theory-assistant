@@ -81,3 +81,7 @@ streamlit run app.py
 python script.py data/corpus/constructivism/ -p openai
 python script.py data/socratic -p openai -m gpt-4o
 python script.py data/corpus/scaffolding -p openai -m gpt-4o
+
+Questions:
+If a vehicle is running at 20m/s and it takes 5 seconds to stop, what is the acceleration of the vehicle? 
+what is the pythagora's theorem ?

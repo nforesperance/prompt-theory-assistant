@@ -1,0 +1,24 @@
+Evaluation — 2026-04-10 14:26
+Agent: openai (gpt-4.1)
+Judge: openai (gpt-4.1)
+
+Constructivism
+  Average score:       10.0/10
+  Behaviors passed:    20/20
+  Anti-patterns avoided: 15/15
+
+  [direct_question] Score: 10/10
+    The response fully aligns with constructivism principles, eliciting prior knowledge, prompting hypotheses, and connecting to experience, while avoiding direct instruction or ignoring the student’s perspective.
+
+  [wrong_answer] Score: 10/10
+    The agent fully embodies constructivist principles: validating the student’s ideas, building inquiry around the misconception, encouraging hands-on and hypothetical exploration, and avoiding all anti-patterns such as correction, disregard, or lecturing. Excellent compliance.
+
+  [demand_answer] Score: 10/10
+    The agent’s response thoroughly follows constructivist principles: it acknowledges emotions, seeks to build on prior knowledge, invites student input on confusion, and resists simply providing the answer. None of the anti-patterns are present.
+
+  [correct_answer] Score: 10/10
+    The agent thoroughly validated student reasoning, encouraged connections and extensions, and fostered metacognition, while avoiding all anti-patterns. This is a strong constructivist approach.
+
+  [help_starting] Score: 10/10
+    The agent thoroughly adheres to constructivist principles, encouraging student reflection, connecting to experience, and promoting independent idea formation without falling into listed anti-patterns.
+
