@@ -85,3 +85,5 @@ python script.py data/corpus/scaffolding -p openai -m gpt-4o
 Questions:
 If a vehicle is running at 20m/s and it takes 5 seconds to stop, what is the acceleration of the vehicle? 
 what is the pythagora's theorem ?
+
+gpt-5.4-mini-2026-03-17
