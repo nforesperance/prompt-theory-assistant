@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS classes (
     session_code   TEXT NOT NULL UNIQUE,
     topic          TEXT,
     theory         TEXT NOT NULL,
+    provider       TEXT NOT NULL DEFAULT 'openai',
+    model          TEXT,
     created_at     TEXT NOT NULL
 );
 
@@ -100,6 +102,16 @@ def connect():
 def init_db() -> None:
     with connect() as c:
         c.executescript(SCHEMA)
+        _migrate(c)
+
+
+def _migrate(c) -> None:
+    """Add columns that were introduced after initial release."""
+    cols = {row["name"] for row in c.execute("PRAGMA table_info(classes)")}
+    if "provider" not in cols:
+        c.execute("ALTER TABLE classes ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'")
+    if "model" not in cols:
+        c.execute("ALTER TABLE classes ADD COLUMN model TEXT")
 
 
 # ─── Teachers ──────────────────────────────────────────────────────────────
@@ -130,13 +142,18 @@ def create_class(
     name: str,
     topic: str,
     theory: str,
+    provider: str,
+    model: str | None = None,
 ) -> dict:
     session_code = secrets.token_urlsafe(4).upper().replace("_", "").replace("-", "")[:8]
     with connect() as c:
         cur = c.execute(
-            "INSERT INTO classes (teacher_email, name, session_code, topic, theory, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (teacher_email.lower(), name, session_code, topic, theory, _now()),
+            "INSERT INTO classes (teacher_email, name, session_code, topic, theory, "
+            "provider, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                teacher_email.lower(), name, session_code, topic, theory,
+                provider, model or None, _now(),
+            ),
         )
         return {"id": cur.lastrowid, "session_code": session_code}
 

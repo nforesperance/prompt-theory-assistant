@@ -54,9 +54,7 @@ def load_theory_prompt(theory: str) -> str:
     return (PROMPTS_DIR / theory / "system_prompt.md").read_text(encoding="utf-8")
 
 
-def get_llm():
-    provider_name = st.session_state.get("provider", "openai")
-    model = st.session_state.get("model") or None
+def get_llm(provider_name: str, model: str | None = None):
     env_key = ENV_KEYS.get(provider_name)
     if env_key and not os.environ.get(env_key):
         st.error(
@@ -162,26 +160,50 @@ def render_create_class(teacher_email: str):
         st.warning("No theory prompts found in `prompts/`. Generate one with `script.py`.")
         return
 
+    providers = list(PROVIDERS)
+    default_idx = providers.index("openai") if "openai" in providers else 0
+
     with st.form("create_class"):
         name = st.text_input("Class name (e.g. 'Math 7B')")
         topic = st.text_input("Topic for this session (e.g. 'Pythagorean theorem')")
         theory = st.selectbox("Teaching theory", theories)
+        col_p, col_m = st.columns(2)
+        with col_p:
+            provider = st.selectbox("Model provider", providers, index=default_idx)
+        with col_m:
+            model = st.text_input(
+                "Model (optional — blank uses provider default)",
+                placeholder="e.g. gpt-4.1, claude-sonnet-4-5",
+            )
+        st.caption(
+            "Students will use whichever provider and model you pick here for their whole session."
+        )
         submitted = st.form_submit_button("Create class")
     if submitted:
         if not name:
             st.error("Class name is required.")
             return
-        result = storage.create_class(teacher_email, name, topic, theory)
+        env_key = ENV_KEYS.get(provider)
+        if env_key and not os.environ.get(env_key):
+            st.error(
+                f"Cannot create class: {env_key} is not set. "
+                "Add it to `.env` (local) or Streamlit Cloud secrets and retry."
+            )
+            return
+        result = storage.create_class(
+            teacher_email, name, topic, theory, provider, model.strip() or None
+        )
         st.success(f"Class created. Session code: **{result['session_code']}**")
         st.rerun()
 
 
 def render_class_detail(cls: dict):
     st.markdown(f"### {cls['name']}")
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Session code", cls["session_code"])
     c2.metric("Theory", cls["theory"])
     c3.metric("Topic", cls["topic"] or "—")
+    c4.metric("Model", f"{cls['provider']} / {cls.get('model') or 'default'}")
 
     st.divider()
 
@@ -274,10 +296,11 @@ def render_student():
     cls = storage.get_class(a["class_id"])
     student = storage.get_student(a["class_id"], a["student_id"])
 
-    # Initialize orchestrator once per session
+    # Initialize orchestrator once per session, using the provider/model
+    # configured by the teacher for this class.
     if "orch" not in st.session_state:
         st.session_state["orch"] = ClassroomOrchestrator(
-            llm=get_llm(),
+            llm=get_llm(cls["provider"], cls.get("model")),
             class_info=cls,
             student=student,
             prompt_loader=load_theory_prompt,
@@ -316,34 +339,12 @@ def render_student():
         st.write_stream(orch.stream_reply(user_msg))
 
 
-# ─── Shared sidebar (provider selection) ───────────────────────────────────
-
-def render_provider_sidebar():
-    with st.sidebar:
-        st.divider()
-        st.markdown("**Model**")
-        providers = list(PROVIDERS)
-        default_idx = providers.index("openai") if "openai" in providers else 0
-        st.session_state["provider"] = st.selectbox(
-            "Provider", providers, index=default_idx, key="provider_select"
-        )
-        st.session_state["model"] = st.text_input(
-            "Model override (optional)", value="", key="model_input",
-            placeholder="e.g. gpt-4.1 or claude-sonnet-4-5",
-        )
-        env_key = ENV_KEYS.get(st.session_state["provider"])
-        if env_key and not os.environ.get(env_key):
-            st.warning(f"⚠️ {env_key} not set")
-
-
 # ─── Router ────────────────────────────────────────────────────────────────
 
 def main():
     if auth.is_teacher():
-        render_provider_sidebar()
         render_teacher()
     elif auth.is_student():
-        render_provider_sidebar()
         render_student()
     else:
         render_landing()

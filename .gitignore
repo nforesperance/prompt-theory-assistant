@@ -178,3 +178,5 @@ pyrightconfig.json
 
 data/
 *.json
+
+paper/
