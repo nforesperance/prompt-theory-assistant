@@ -84,7 +84,7 @@ def render_landing():
     st.title("🎓 Assistant Pédagogique — Classe")
     st.caption("Tutorat fondé sur des théories pédagogiques pour les pilotes en classe.")
 
-    tab_teacher, tab_student = st.tabs(["Je suis enseignant", "Je suis élève"])
+    tab_teacher, tab_student = st.tabs(["Je suis enseignant", "Je suis étudiant(e)"])
 
     with tab_teacher:
         render_teacher_login()
@@ -128,11 +128,11 @@ def render_teacher_login():
 
 
 def render_student_login():
-    st.subheader("Connexion élève")
+    st.subheader("Connexion étudiant(e)")
     st.caption("Demandez le Tutor Id à votre enseignant.")
     with st.form("student_login"):
         code = st.text_input("Tutor Id").upper()
-        sid = st.text_input("Votre identifiant élève")
+        sid = st.text_input("Votre identifiant étudiant(e)")
         submitted = st.form_submit_button("Rejoindre la session")
     if submitted:
         err = auth.login_student(code, sid)
