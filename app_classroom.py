@@ -407,20 +407,25 @@ def render_sessions_list(class_id: int):
 
 # ─── Student chat ──────────────────────────────────────────────────────────
 
+# Number of tutoring conditions each pilot participant completes. When a
+# student has submitted this many evaluations, the final open-ended
+# questionnaire is shown.
+STUDY_REQUIRED_SESSIONS = 4
+
+
 def render_student():
     a = auth.current_auth()
-    with st.sidebar:
-        st.write(f"**{a['display_name']}**")
-        st.caption(f"Class: {a['class_name']}")
-        if st.button("Leave session", width="stretch"):
-            auth.logout()
-            st.rerun()
+
+    # Study already fully completed — show a thank-you page on any future login.
+    if storage.get_final_response(a["student_id"]):
+        render_study_complete(a)
+        return
 
     cls = storage.get_class(a["class_id"])
     student = storage.get_student(a["class_id"], a["student_id"])
 
-    # Initialize orchestrator once per session, using the provider/model
-    # configured by the teacher for this class.
+    # Initialize orchestrator once per Streamlit session. Creates or resumes
+    # the underlying DB session for this (class, student) pair.
     if "orch" not in st.session_state:
         st.session_state["orch"] = ClassroomOrchestrator(
             llm=get_llm(cls["provider"], cls.get("model")),
@@ -431,25 +436,67 @@ def render_student():
         )
     orch: ClassroomOrchestrator = st.session_state["orch"]
 
-    st.title(f"Hi {a['display_name'].split()[0]}! 👋")
+    existing_eval = storage.get_evaluation(orch.session_id)
+    eval_count = storage.count_evaluations_for_student(a["student_id"])
+
+    _render_student_sidebar(a, eval_count, eval_locked=existing_eval is not None)
+
+    if existing_eval is not None:
+        # This session has already been evaluated — chat is locked.
+        if eval_count >= STUDY_REQUIRED_SESSIONS:
+            render_final_questions(a)
+        else:
+            render_session_locked(a, existing_eval, eval_count)
+        return
+
+    if st.session_state.get("eval_pending"):
+        render_evaluation_form(orch, cls, a)
+        return
+
+    render_chat(orch, cls, a)
+
+
+def _render_student_sidebar(a: dict, eval_count: int, *, eval_locked: bool) -> None:
+    with st.sidebar:
+        st.write(f"**{a['display_name']}**")
+        st.caption(f"Classe : {a['class_name']}")
+        st.caption(f"Tutor Id : `{a['session_code']}`")
+        st.caption(
+            f"Progression : **{eval_count}/{STUDY_REQUIRED_SESSIONS}** "
+            "sessions évaluées"
+        )
+        st.divider()
+        if not eval_locked and not st.session_state.get("eval_pending"):
+            if st.button(
+                "Terminer la session et évaluer",
+                width="stretch",
+                type="primary",
+            ):
+                st.session_state["eval_pending"] = True
+                st.rerun()
+        if st.button("Quitter la session", width="stretch"):
+            auth.logout()
+            st.rerun()
+
+
+def render_chat(orch: ClassroomOrchestrator, cls: dict, a: dict) -> None:
+    st.title(f"Bonjour {a['display_name'].split()[0]} ! 👋")
     if cls.get("topic"):
-        st.caption(f"Today's topic: **{cls['topic']}**")
+        st.caption(f"Sujet du jour : **{cls['topic']}**")
     if orch.is_resumed:
         st.info(
-            f"Welcome back — continuing your previous session "
-            f"({len(orch.messages) // 2} exchanges so far)."
+            f"Bienvenue à nouveau — reprise de votre session précédente "
+            f"({len(orch.messages) // 2} échange(s) jusqu'ici)."
         )
 
-    # Replay transcript
     for m in orch.messages:
         with st.chat_message(m["role"], avatar="🎓" if m["role"] == "assistant" else None):
             st.write(m["content"])
 
-    user_msg = st.chat_input("Ask anything about today's topic…")
+    user_msg = st.chat_input("Posez vos questions sur le sujet du jour…")
     if not user_msg:
         return
 
-    # Safety pre-flight
     support = orch.check_safety(user_msg)
     if support:
         with st.chat_message("user"):
@@ -459,12 +506,155 @@ def render_student():
         orch.record_support_turn(user_msg, support)
         return
 
-    # Routing + system prompt refresh, then stream the reply
     orch.prepare_turn()
     with st.chat_message("user"):
         st.write(user_msg)
     with st.chat_message("assistant", avatar="🎓"):
         st.write_stream(orch.stream_reply(user_msg))
+
+
+def render_evaluation_form(orch: ClassroomOrchestrator, cls: dict, a: dict) -> None:
+    st.title("Évaluation de la session")
+    st.caption(
+        f"Tutor Id : `{a['session_code']}` · "
+        f"Problème : {cls.get('topic') or '—'}"
+    )
+    st.caption(
+        "1 = pas du tout d'accord · 4 = neutre · 7 = tout à fait d'accord"
+    )
+
+    with st.form("session_evaluation"):
+        coherence = st.slider(
+            "**Cohérence** — L'approche du tuteur était cohérente et "
+            "il a tenu un style d'enseignement clair.",
+            1, 7, 4,
+        )
+        made_me_think = st.slider(
+            "**M'a fait réfléchir** — Le tuteur m'a aidé à raisonner "
+            "sur le problème plutôt que de me donner la réponse.",
+            1, 7, 4,
+        )
+        one_at_a_time = st.slider(
+            "**Une chose à la fois** — Le tuteur posait une seule "
+            "question à la fois plutôt que de me submerger.",
+            1, 7, 4,
+        )
+        reuse = st.slider(
+            "**Je l'utiliserais à nouveau** — J'utiliserais à nouveau "
+            "ce tuteur pour un problème similaire.",
+            1, 7, 4,
+        )
+        notes = st.text_area("Notes brèves (facultatif)", height=100)
+
+        col_cancel, col_submit = st.columns([1, 2])
+        with col_cancel:
+            cancel = st.form_submit_button("Retour au chat", width="stretch")
+        with col_submit:
+            submit = st.form_submit_button(
+                "Soumettre l'évaluation",
+                type="primary",
+                width="stretch",
+            )
+
+    if cancel:
+        st.session_state.pop("eval_pending", None)
+        st.rerun()
+    if submit:
+        try:
+            storage.submit_evaluation(
+                session_id=orch.session_id,
+                class_id=a["class_id"],
+                student_id=a["student_id"],
+                ratings={
+                    "coherence": coherence,
+                    "made_me_think": made_me_think,
+                    "one_at_a_time": one_at_a_time,
+                    "reuse": reuse,
+                },
+                notes=notes.strip() or None,
+            )
+        except Exception as e:
+            st.error(f"Impossible d'enregistrer l'évaluation : {e}")
+            return
+        st.session_state.pop("eval_pending", None)
+        st.rerun()
+
+
+def render_session_locked(a: dict, evaluation: dict, eval_count: int) -> None:
+    remaining = STUDY_REQUIRED_SESSIONS - eval_count
+    st.title("Évaluation enregistrée ✅")
+    st.success(
+        f"Merci {a['display_name'].split()[0]} ! Vous avez évalué "
+        f"**{eval_count}/{STUDY_REQUIRED_SESSIONS}** sessions."
+    )
+    if remaining > 0:
+        st.info(
+            f"Il vous reste **{remaining}** session(s) à compléter. "
+            "Cliquez sur **Quitter la session** dans la barre latérale, "
+            "puis connectez-vous au prochain tuteur avec le Tutor Id "
+            "fourni sur votre carte de session."
+        )
+    with st.expander("Voir mes réponses pour cette session"):
+        st.markdown(f"- **Cohérence** : {evaluation['coherence']}/7")
+        st.markdown(f"- **M'a fait réfléchir** : {evaluation['made_me_think']}/7")
+        st.markdown(f"- **Une chose à la fois** : {evaluation['one_at_a_time']}/7")
+        st.markdown(f"- **Je l'utiliserais à nouveau** : {evaluation['reuse']}/7")
+        if evaluation.get("notes"):
+            st.markdown(f"- **Notes** : {evaluation['notes']}")
+
+
+def render_final_questions(a: dict) -> None:
+    st.title("Questions finales 🎯")
+    st.caption("À remplir après vos quatre sessions (≈ 3 minutes).")
+    st.info(
+        "Vous avez terminé les quatre sessions de tutorat. "
+        "Merci de répondre aux questions ci-dessous pour clôturer l'étude."
+    )
+
+    with st.form("final_questions"):
+        differences = st.text_area(
+            "Quelles différences avez-vous remarquées entre les quatre tuteurs ?",
+            height=200,
+        )
+        standout = st.text_area(
+            "Un tuteur particulièrement utile ou frustrant ? (facultatif)",
+            height=150,
+        )
+        submit = st.form_submit_button(
+            "Soumettre mes réponses", type="primary"
+        )
+    if submit:
+        if not differences.strip():
+            st.error("Merci de répondre à la première question.")
+            return
+        try:
+            storage.submit_final_response(
+                a["student_id"],
+                differences.strip(),
+                standout.strip() or None,
+            )
+        except Exception as e:
+            st.error(f"Impossible d'enregistrer vos réponses : {e}")
+            return
+        st.rerun()
+
+
+def render_study_complete(a: dict) -> None:
+    with st.sidebar:
+        st.write(f"**{a['display_name']}**")
+        st.caption("Étude terminée")
+        if st.button("Quitter", width="stretch"):
+            auth.logout()
+            st.rerun()
+    st.title("Merci pour votre participation ! 🎉")
+    st.success(
+        "Vous avez terminé l'étude pilote. Toutes vos réponses ont été "
+        "enregistrées."
+    )
+    st.caption(
+        "Vous pouvez fermer cette page ou vous déconnecter via la barre "
+        "latérale."
+    )
 
 
 # ─── Router ────────────────────────────────────────────────────────────────

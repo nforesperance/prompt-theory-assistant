@@ -300,3 +300,89 @@ def get_latest_session_for_student(
         .execute()
     )
     return res.data[0] if res.data else None
+
+
+# ─── Evaluations ───────────────────────────────────────────────────────────
+
+def submit_evaluation(
+    session_id: int,
+    class_id: int,
+    student_id: str,
+    ratings: dict[str, int],
+    notes: str | None,
+) -> None:
+    sb = _get_client()
+    sb.table("evaluations").insert(
+        {
+            "session_id": session_id,
+            "class_id": class_id,
+            "student_id": student_id,
+            "coherence": ratings["coherence"],
+            "made_me_think": ratings["made_me_think"],
+            "one_at_a_time": ratings["one_at_a_time"],
+            "reuse": ratings["reuse"],
+            "notes": notes or None,
+        }
+    ).execute()
+
+
+def get_evaluation(session_id: int) -> dict | None:
+    sb = _get_client()
+    res = (
+        sb.table("evaluations")
+        .select("*")
+        .eq("session_id", session_id)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def count_evaluations_for_student(student_id: str) -> int:
+    sb = _get_client()
+    res = (
+        sb.table("evaluations")
+        .select("session_id", count="exact")
+        .eq("student_id", student_id)
+        .execute()
+    )
+    return res.count or 0
+
+
+def list_evaluations_for_class(class_id: int) -> list[dict]:
+    sb = _get_client()
+    res = (
+        sb.table("evaluations")
+        .select("*")
+        .eq("class_id", class_id)
+        .order("submitted_at", desc=True)
+        .execute()
+    )
+    return res.data or []
+
+
+# ─── Final responses ───────────────────────────────────────────────────────
+
+def get_final_response(student_id: str) -> dict | None:
+    sb = _get_client()
+    res = (
+        sb.table("final_responses")
+        .select("*")
+        .eq("student_id", student_id)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def submit_final_response(
+    student_id: str, differences: str, standout: str | None
+) -> None:
+    sb = _get_client()
+    sb.table("final_responses").insert(
+        {
+            "student_id": student_id,
+            "differences": differences,
+            "standout": standout or None,
+        }
+    ).execute()

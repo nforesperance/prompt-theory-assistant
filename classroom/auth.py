@@ -46,11 +46,11 @@ def login_student(session_code: str, student_id: str) -> str | None:
     """Returns error message string on failure, None on success."""
     cls = storage.get_class_by_code(session_code.strip().upper())
     if not cls:
-        return "Session code not found. Check with your teacher."
+        return "Tutor Id introuvable. Demandez à votre enseignant."
 
     student = storage.get_student(cls["id"], student_id.strip())
     if not student:
-        return "Your student ID is not on this class roster."
+        return "Votre identifiant étudiant(e) n'est pas dans la liste de cette classe."
 
     st.session_state["auth"] = {
         "role": "student",
@@ -64,5 +64,8 @@ def login_student(session_code: str, student_id: str) -> str | None:
 
 
 def logout() -> None:
-    for k in ("auth", "orch", "agent", "session_id", "messages", "state", "theory"):
+    for k in (
+        "auth", "orch", "agent", "session_id", "messages", "state", "theory",
+        "eval_pending",
+    ):
         st.session_state.pop(k, None)
