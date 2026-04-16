@@ -61,14 +61,42 @@ class ClassroomOrchestrator:
         self._list_theories = theories_provider
         self._route_after_turn = route_after_turn
 
-        self.theory: str = class_info["theory"]
-        self.state: dict = self._build_initial_state()
-        self.messages: list[dict] = []
-        self.session_id: int = storage.start_session(
-            class_info["id"], student["student_id"], self.state
+        existing = storage.get_latest_session_for_student(
+            class_info["id"], student["student_id"]
         )
+        if existing:
+            self._hydrate_from_session(existing)
+        else:
+            self._hydrate_new()
 
-        self.agent = TeachingAgent(self._compose_system_prompt(), llm)
+    def _hydrate_new(self) -> None:
+        self.theory = self._class["theory"]
+        self.state = self._build_initial_state()
+        self.messages = []
+        self.session_id = storage.start_session(
+            self._class["id"], self._student["student_id"], self.state
+        )
+        self.agent = TeachingAgent(self._compose_system_prompt(), self._llm)
+
+    def _hydrate_from_session(self, existing: dict) -> None:
+        """Resume an existing long-lived session. State, transcript,
+        and agent history are all restored from Supabase."""
+        self.session_id = existing["id"]
+        self.state = existing["state"]
+        self.messages = existing.get("transcript") or []
+        self.theory = (
+            self.state.get("routing", {}).get("current_theory")
+            or self._class["theory"]
+        )
+        self.agent = TeachingAgent(self._compose_system_prompt(), self._llm)
+        # Replay transcript into the agent so model-side history matches
+        # what we will persist going forward.
+        self.agent.messages = [dict(m) for m in self.messages]
+
+    @property
+    def is_resumed(self) -> bool:
+        """True when this orchestrator picked up a pre-existing session."""
+        return bool(self.messages)
 
     # ─── Public API ──────────────────────────────────────────────────────
 

@@ -23,7 +23,12 @@ from providers import ENV_KEYS, PROVIDERS, get_provider
 # ─── Bridge Streamlit secrets → environment variables ─────────────────────
 # Streamlit Community Cloud injects API keys via st.secrets, not os.environ.
 # Locally, providers.py already calls load_dotenv() so .env works unchanged.
-for _env_var in ENV_KEYS.values():
+_BRIDGED_SECRETS = list(ENV_KEYS.values()) + [
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_KEY",
+]
+for _env_var in _BRIDGED_SECRETS:
     if _env_var not in os.environ:
         try:
             os.environ[_env_var] = st.secrets[_env_var]
@@ -131,27 +136,69 @@ def render_student_login():
 def render_teacher():
     a = auth.current_auth()
     with st.sidebar:
-        st.write(f"**{a['name']}**")
-        st.caption(a["email"])
+        # If the teacher signed up with their email in the Name field,
+        # avoid rendering it twice — and avoid Streamlit auto-linking
+        # the email when wrapped in markdown bold.
+        display_name = a.get("name") or a["email"]
+        st.markdown(f"**{display_name}**")
+        if display_name.lower() != a["email"].lower():
+            st.caption(a["email"])
         if st.button("Sign out", width="stretch"):
             auth.logout()
             st.rerun()
 
     st.title("Teacher dashboard")
 
-    tab_classes, tab_create = st.tabs(["My classes", "Create a class"])
+    # Persistent success banner for class create/delete — rendered above
+    # the view selector so it's visible regardless of which view is active.
+    created = st.session_state.pop("class_created", None)
+    if created:
+        st.success(
+            f"✅ Class **{created['name']}** created. "
+            f"Session code: **`{created['session_code']}`**"
+        )
 
-    with tab_create:
+    # Programmatic view control — unlike st.tabs, this can be flipped
+    # from code (e.g. after creating a class).
+    st.segmented_control(
+        "view",
+        options=["My classes", "Create a class"],
+        default="My classes",
+        key="teacher_view",
+        label_visibility="collapsed",
+    )
+    view = st.session_state.get("teacher_view") or "My classes"
+
+    if view == "Create a class":
         render_create_class(a["email"])
+    else:
+        render_my_classes(a["email"])
 
-    with tab_classes:
-        classes = storage.list_classes(a["email"])
-        if not classes:
-            st.info("You haven't created any classes yet.")
-            return
-        names = [f"{c['name']}  ·  code: {c['session_code']}" for c in classes]
-        idx = st.selectbox("Select a class", range(len(classes)), format_func=lambda i: names[i])
-        render_class_detail(classes[idx])
+
+def render_my_classes(teacher_email: str):
+    classes = storage.list_classes(teacher_email)
+    if not classes:
+        st.info("You haven't created any classes yet. Use **Create a class** to start.")
+        return
+
+    # Pre-select a class if one was just created/opened from elsewhere.
+    pending = st.session_state.pop("selected_class_id", None)
+    default_idx = 0
+    if pending is not None:
+        for i, c in enumerate(classes):
+            if c["id"] == pending:
+                default_idx = i
+                break
+
+    names = [f"{c['name']}  ·  code: {c['session_code']}" for c in classes]
+    idx = st.selectbox(
+        "Select a class",
+        range(len(classes)),
+        format_func=lambda i: names[i],
+        index=default_idx,
+        key="teacher_class_picker",
+    )
+    render_class_detail(classes[idx], teacher_email)
 
 
 def render_create_class(teacher_email: str):
@@ -163,7 +210,7 @@ def render_create_class(teacher_email: str):
     providers = list(PROVIDERS)
     default_idx = providers.index("openai") if "openai" in providers else 0
 
-    with st.form("create_class"):
+    with st.form("create_class", clear_on_submit=True):
         name = st.text_input("Class name (e.g. 'Math 7B')")
         topic = st.text_input("Topic for this session (e.g. 'Pythagorean theorem')")
         theory = st.selectbox("Starting teaching theory", theories)
@@ -204,12 +251,23 @@ def render_create_class(teacher_email: str):
             teacher_email, name, topic, theory, provider,
             model.strip() or None, adaptive_routing,
         )
-        st.success(f"Class created. Session code: **{result['session_code']}**")
+        st.toast(f"Class '{name}' created — code {result['session_code']}", icon="✅")
+        st.session_state["class_created"] = {
+            "name": name,
+            "session_code": result["session_code"],
+        }
+        st.session_state["teacher_view"] = "My classes"
+        st.session_state["selected_class_id"] = result["id"]
+        st.session_state.pop("teacher_class_picker", None)
         st.rerun()
 
 
-def render_class_detail(cls: dict):
-    st.markdown(f"### {cls['name']}")
+def render_class_detail(cls: dict, teacher_email: str):
+    header_col, delete_col = st.columns([4, 1])
+    with header_col:
+        st.markdown(f"### {cls['name']}")
+    with delete_col:
+        render_delete_class_button(cls, teacher_email)
 
     model_str = f"{cls['provider']} / {cls.get('model') or 'default'}"
     adaptive_str = "ON" if cls.get("adaptive_routing", 1) else "OFF"
@@ -235,6 +293,34 @@ def render_class_detail(cls: dict):
 
     with sub_sessions:
         render_sessions_list(cls["id"])
+
+
+def render_delete_class_button(cls: dict, teacher_email: str) -> None:
+    """Destructive action with a two-step confirmation inside a popover."""
+    with st.popover("🗑️ Delete class", use_container_width=True):
+        st.warning(
+            f"Permanently delete **{cls['name']}**, its roster, and all student sessions?\n\n"
+            "This cannot be undone."
+        )
+        confirm_label = st.text_input(
+            "Type the session code to confirm",
+            key=f"del_confirm_{cls['id']}",
+            placeholder=cls["session_code"],
+        )
+        if st.button(
+            "Delete permanently",
+            type="primary",
+            key=f"del_btn_{cls['id']}",
+            disabled=(confirm_label.strip().upper() != cls["session_code"]),
+        ):
+            deleted = storage.delete_class(cls["id"], teacher_email)
+            if deleted:
+                st.session_state.pop("teacher_class_picker", None)
+                st.session_state.pop("selected_class_id", None)
+                st.toast(f"Class '{cls['name']}' deleted", icon="🗑️")
+                st.rerun()
+            else:
+                st.error("Could not delete — class not found or not owned by you.")
 
 
 def render_roster_upload(class_id: int):
@@ -331,6 +417,11 @@ def render_student():
     st.title(f"Hi {a['display_name'].split()[0]}! 👋")
     if cls.get("topic"):
         st.caption(f"Today's topic: **{cls['topic']}**")
+    if orch.is_resumed:
+        st.info(
+            f"Welcome back — continuing your previous session "
+            f"({len(orch.messages) // 2} exchanges so far)."
+        )
 
     # Replay transcript
     for m in orch.messages:

@@ -1,75 +1,61 @@
-"""SQLite persistence for classroom deployment.
+"""Supabase-backed persistence for the classroom deployment.
 
-Single-file DB. All writes go through this module so swapping to Postgres
-later is a one-file change.
+Public API is deliberately identical to the previous SQLite version so
+that callers (auth, orchestrator, app) need no changes. Migration from
+SQLite to Supabase happened in one file.
+
+Authentication is still handled in Python (PBKDF2 password hashes in
+`teachers`) rather than Supabase Auth — keeps the surface area small
+for a 6-person pilot and avoids requiring email SMTP config. Students
+authenticate with a session code + student_id looked up against the
+`students` roster.
+
+All DB calls go through the service-role client, which bypasses RLS.
+Authorisation is enforced in the Python caller (`classroom/auth.py`).
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import secrets
-import sqlite3
-from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-DB_PATH = Path(os.environ.get("CLASSROOM_DB", "data/classroom.db"))
+from supabase import Client, create_client
 
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS teachers (
-    email          TEXT PRIMARY KEY,
-    name           TEXT NOT NULL,
-    password_hash  TEXT NOT NULL,
-    created_at     TEXT NOT NULL
-);
+# ─── Client ───────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS classes (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    teacher_email     TEXT NOT NULL REFERENCES teachers(email),
-    name              TEXT NOT NULL,
-    session_code      TEXT NOT NULL UNIQUE,
-    topic             TEXT,
-    theory            TEXT NOT NULL,
-    provider          TEXT NOT NULL DEFAULT 'openai',
-    model             TEXT,
-    adaptive_routing  INTEGER NOT NULL DEFAULT 1,
-    created_at        TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS students (
-    class_id       INTEGER NOT NULL REFERENCES classes(id),
-    student_id     TEXT NOT NULL,
-    display_name   TEXT NOT NULL,
-    grade_level    INTEGER,
-    reading_level  TEXT,
-    language       TEXT DEFAULT 'en',
-    accommodations TEXT,
-    notes          TEXT,
-    PRIMARY KEY (class_id, student_id)
-);
-
-CREATE TABLE IF NOT EXISTS sessions (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    class_id        INTEGER NOT NULL REFERENCES classes(id),
-    student_id      TEXT NOT NULL,
-    started_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL,
-    state_json      TEXT NOT NULL,
-    transcript_json TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_class_student
-    ON sessions(class_id, student_id);
-"""
+_client: Client | None = None
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _get_client() -> Client:
+    """Lazy singleton. Reads Supabase URL and service-role key from env."""
+    global _client
+    if _client is None:
+        url = os.environ.get("SUPABASE_URL")
+        key = (
+            os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+            or os.environ.get("SUPABASE_KEY")
+        )
+        if not url or not key:
+            raise RuntimeError(
+                "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set "
+                "(in .env locally or in Streamlit secrets on cloud)."
+            )
+        _client = create_client(url, key)
+    return _client
 
+
+def init_db() -> None:
+    """Kept for API parity with the old SQLite backend. Schema is
+    provisioned by running `supabase/schema.sql` once in the Supabase
+    SQL editor; there is nothing to do at runtime."""
+    return None
+
+
+# ─── Password hashing ─────────────────────────────────────────────────────
 
 def _hash_password(password: str, salt: str | None = None) -> str:
     salt = salt or secrets.token_hex(16)
@@ -87,60 +73,43 @@ def _verify_password(password: str, stored: str) -> bool:
     return secrets.compare_digest(_hash_password(password, salt), stored)
 
 
-@contextmanager
-def connect():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def init_db() -> None:
-    with connect() as c:
-        c.executescript(SCHEMA)
-        _migrate(c)
-
-
-def _migrate(c) -> None:
-    """Add columns that were introduced after initial release."""
-    cols = {row["name"] for row in c.execute("PRAGMA table_info(classes)")}
-    if "provider" not in cols:
-        c.execute("ALTER TABLE classes ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'")
-    if "model" not in cols:
-        c.execute("ALTER TABLE classes ADD COLUMN model TEXT")
-    if "adaptive_routing" not in cols:
-        c.execute(
-            "ALTER TABLE classes ADD COLUMN adaptive_routing INTEGER NOT NULL DEFAULT 1"
-        )
-
-
 # ─── Teachers ──────────────────────────────────────────────────────────────
 
 def create_teacher(email: str, name: str, password: str) -> None:
-    with connect() as c:
-        c.execute(
-            "INSERT INTO teachers (email, name, password_hash, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (email.lower(), name, _hash_password(password), _now()),
-        )
+    sb = _get_client()
+    sb.table("teachers").insert(
+        {
+            "email": email.lower(),
+            "name": name,
+            "password_hash": _hash_password(password),
+        }
+    ).execute()
 
 
 def authenticate_teacher(email: str, password: str) -> dict | None:
-    with connect() as c:
-        row = c.execute(
-            "SELECT * FROM teachers WHERE email = ?", (email.lower(),)
-        ).fetchone()
-    if row and _verify_password(password, row["password_hash"]):
+    sb = _get_client()
+    res = (
+        sb.table("teachers")
+        .select("email,name,password_hash")
+        .eq("email", email.lower())
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return None
+    row = res.data[0]
+    if _verify_password(password, row["password_hash"]):
         return {"email": row["email"], "name": row["name"]}
     return None
 
 
 # ─── Classes ───────────────────────────────────────────────────────────────
+
+def _make_session_code() -> str:
+    return (
+        secrets.token_urlsafe(4).upper().replace("_", "").replace("-", "")[:8]
+    )
+
 
 def create_class(
     teacher_email: str,
@@ -151,125 +120,183 @@ def create_class(
     model: str | None = None,
     adaptive_routing: bool = True,
 ) -> dict:
-    session_code = secrets.token_urlsafe(4).upper().replace("_", "").replace("-", "")[:8]
-    with connect() as c:
-        cur = c.execute(
-            "INSERT INTO classes (teacher_email, name, session_code, topic, theory, "
-            "provider, model, adaptive_routing, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                teacher_email.lower(), name, session_code, topic, theory,
-                provider, model or None, int(bool(adaptive_routing)), _now(),
-            ),
+    sb = _get_client()
+    code = _make_session_code()
+    res = (
+        sb.table("classes")
+        .insert(
+            {
+                "teacher_email": teacher_email.lower(),
+                "name": name,
+                "session_code": code,
+                "topic": topic,
+                "theory": theory,
+                "provider": provider,
+                "model": model,
+                "adaptive_routing": bool(adaptive_routing),
+            }
         )
-        return {"id": cur.lastrowid, "session_code": session_code}
+        .execute()
+    )
+    return {"id": res.data[0]["id"], "session_code": code}
 
 
 def list_classes(teacher_email: str) -> list[dict]:
-    with connect() as c:
-        rows = c.execute(
-            "SELECT * FROM classes WHERE teacher_email = ? ORDER BY created_at DESC",
-            (teacher_email.lower(),),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    sb = _get_client()
+    res = (
+        sb.table("classes")
+        .select("*")
+        .eq("teacher_email", teacher_email.lower())
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return res.data or []
 
 
 def get_class_by_code(session_code: str) -> dict | None:
-    with connect() as c:
-        row = c.execute(
-            "SELECT * FROM classes WHERE session_code = ?", (session_code.upper(),)
-        ).fetchone()
-    return dict(row) if row else None
+    sb = _get_client()
+    res = (
+        sb.table("classes")
+        .select("*")
+        .eq("session_code", session_code.upper())
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
 
 
 def get_class(class_id: int) -> dict | None:
-    with connect() as c:
-        row = c.execute("SELECT * FROM classes WHERE id = ?", (class_id,)).fetchone()
-    return dict(row) if row else None
+    sb = _get_client()
+    res = sb.table("classes").select("*").eq("id", class_id).limit(1).execute()
+    return res.data[0] if res.data else None
+
+
+def delete_class(class_id: int, teacher_email: str) -> bool:
+    """Delete a class owned by `teacher_email`. Cascades to students
+    and sessions via the FK constraint. Returns True if a row was
+    deleted, False if no matching class (wrong owner or bad id)."""
+    sb = _get_client()
+    res = (
+        sb.table("classes")
+        .delete()
+        .eq("id", class_id)
+        .eq("teacher_email", teacher_email.lower())
+        .execute()
+    )
+    return bool(res.data)
 
 
 # ─── Roster ────────────────────────────────────────────────────────────────
 
 def replace_roster(class_id: int, students: list[dict]) -> int:
-    with connect() as c:
-        c.execute("DELETE FROM students WHERE class_id = ?", (class_id,))
-        c.executemany(
-            "INSERT INTO students (class_id, student_id, display_name, grade_level, "
-            "reading_level, language, accommodations, notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    class_id,
-                    s["student_id"],
-                    s["display_name"],
-                    s.get("grade_level"),
-                    s.get("reading_level"),
-                    s.get("language", "en"),
-                    s.get("accommodations"),
-                    s.get("notes"),
-                )
-                for s in students
-            ],
-        )
-        return len(students)
+    sb = _get_client()
+    sb.table("students").delete().eq("class_id", class_id).execute()
+    if not students:
+        return 0
+    rows = [
+        {
+            "class_id": class_id,
+            "student_id": s["student_id"],
+            "display_name": s["display_name"],
+            "grade_level": s.get("grade_level"),
+            "reading_level": s.get("reading_level"),
+            "language": s.get("language", "en"),
+            "accommodations": s.get("accommodations"),
+            "notes": s.get("notes"),
+        }
+        for s in students
+    ]
+    sb.table("students").insert(rows).execute()
+    return len(rows)
 
 
 def get_student(class_id: int, student_id: str) -> dict | None:
-    with connect() as c:
-        row = c.execute(
-            "SELECT * FROM students WHERE class_id = ? AND student_id = ?",
-            (class_id, student_id),
-        ).fetchone()
-    return dict(row) if row else None
+    sb = _get_client()
+    res = (
+        sb.table("students")
+        .select("*")
+        .eq("class_id", class_id)
+        .eq("student_id", student_id)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
 
 
 def list_roster(class_id: int) -> list[dict]:
-    with connect() as c:
-        rows = c.execute(
-            "SELECT * FROM students WHERE class_id = ? ORDER BY student_id",
-            (class_id,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    sb = _get_client()
+    res = (
+        sb.table("students")
+        .select("*")
+        .eq("class_id", class_id)
+        .order("student_id")
+        .execute()
+    )
+    return res.data or []
 
 
 # ─── Sessions ──────────────────────────────────────────────────────────────
 
 def start_session(class_id: int, student_id: str, initial_state: dict) -> int:
-    now = _now()
-    with connect() as c:
-        cur = c.execute(
-            "INSERT INTO sessions (class_id, student_id, started_at, updated_at, "
-            "state_json, transcript_json) VALUES (?, ?, ?, ?, ?, ?)",
-            (class_id, student_id, now, now, json.dumps(initial_state), "[]"),
+    sb = _get_client()
+    res = (
+        sb.table("sessions")
+        .insert(
+            {
+                "class_id": class_id,
+                "student_id": student_id,
+                "state": initial_state,
+                "transcript": [],
+            }
         )
-        return cur.lastrowid
+        .execute()
+    )
+    return res.data[0]["id"]
 
 
 def update_session(session_id: int, state: dict, transcript: list[dict]) -> None:
-    with connect() as c:
-        c.execute(
-            "UPDATE sessions SET updated_at = ?, state_json = ?, transcript_json = ? "
-            "WHERE id = ?",
-            (_now(), json.dumps(state), json.dumps(transcript), session_id),
-        )
+    sb = _get_client()
+    sb.table("sessions").update(
+        {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "state": state,
+            "transcript": transcript,
+        }
+    ).eq("id", session_id).execute()
 
 
 def get_session(session_id: int) -> dict | None:
-    with connect() as c:
-        row = c.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
-    if not row:
-        return None
-    d = dict(row)
-    d["state"] = json.loads(d.pop("state_json"))
-    d["transcript"] = json.loads(d.pop("transcript_json"))
-    return d
+    sb = _get_client()
+    res = sb.table("sessions").select("*").eq("id", session_id).limit(1).execute()
+    return res.data[0] if res.data else None
 
 
 def list_sessions(class_id: int) -> list[dict]:
-    with connect() as c:
-        rows = c.execute(
-            "SELECT id, class_id, student_id, started_at, updated_at "
-            "FROM sessions WHERE class_id = ? ORDER BY updated_at DESC",
-            (class_id,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    sb = _get_client()
+    res = (
+        sb.table("sessions")
+        .select("id,class_id,student_id,started_at,updated_at")
+        .eq("class_id", class_id)
+        .order("updated_at", desc=True)
+        .execute()
+    )
+    return res.data or []
+
+
+def get_latest_session_for_student(
+    class_id: int, student_id: str
+) -> dict | None:
+    """Return the most recent session for this (class, student) pair,
+    or None if the student has never started one. Used to resume a
+    long-lived session when a student re-enters the session code."""
+    sb = _get_client()
+    res = (
+        sb.table("sessions")
+        .select("*")
+        .eq("class_id", class_id)
+        .eq("student_id", student_id)
+        .order("updated_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
