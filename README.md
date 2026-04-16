@@ -73,13 +73,8 @@ done
 # CLI mode
 python agent.py prompts/constructivism/system_prompt.md
 
-# Streamlit UI — single-user demo
+# Streamlit UI
 streamlit run app.py
-
-# Streamlit UI — classroom deployment (teacher + students, Supabase-backed)
-#   1. Follow supabase/README.md to provision the database.
-#   2. Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to your .env.
-streamlit run app_classroom.py
 
 
 

@@ -159,7 +159,13 @@ def render_teacher():
         )
 
     # Programmatic view control — unlike st.tabs, this can be flipped
-    # from code (e.g. after creating a class).
+    # from code (e.g. after creating a class). Pending switches must be
+    # applied *before* the widget is instantiated; Streamlit forbids
+    # writing to a widget's session_state key after it renders.
+    pending_view = st.session_state.pop("_pending_teacher_view", None)
+    if pending_view is not None:
+        st.session_state["teacher_view"] = pending_view
+
     st.segmented_control(
         "view",
         options=["My classes", "Create a class"],
@@ -256,7 +262,7 @@ def render_create_class(teacher_email: str):
             "name": name,
             "session_code": result["session_code"],
         }
-        st.session_state["teacher_view"] = "My classes"
+        st.session_state["_pending_teacher_view"] = "My classes"
         st.session_state["selected_class_id"] = result["id"]
         st.session_state.pop("teacher_class_picker", None)
         st.rerun()
