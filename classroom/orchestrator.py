@@ -89,9 +89,11 @@ class ClassroomOrchestrator:
     def prepare_turn(self) -> None:
         """Route theory (if warranted) and refresh the agent's system prompt.
 
-        Call once before streaming a reply.
+        Call once before streaming a reply. Routing is skipped entirely
+        when the teacher disabled it for this class.
         """
-        if self.state["session"]["turn_count"] >= self._route_after_turn:
+        adaptive = bool(self._class.get("adaptive_routing", 1))
+        if adaptive and self.state["session"]["turn_count"] >= self._route_after_turn:
             new_theory, reason = route_theory(
                 self.state, self.theory, self._list_theories(), self._llm
             )

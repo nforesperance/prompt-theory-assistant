@@ -28,15 +28,16 @@ CREATE TABLE IF NOT EXISTS teachers (
 );
 
 CREATE TABLE IF NOT EXISTS classes (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    teacher_email  TEXT NOT NULL REFERENCES teachers(email),
-    name           TEXT NOT NULL,
-    session_code   TEXT NOT NULL UNIQUE,
-    topic          TEXT,
-    theory         TEXT NOT NULL,
-    provider       TEXT NOT NULL DEFAULT 'openai',
-    model          TEXT,
-    created_at     TEXT NOT NULL
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    teacher_email     TEXT NOT NULL REFERENCES teachers(email),
+    name              TEXT NOT NULL,
+    session_code      TEXT NOT NULL UNIQUE,
+    topic             TEXT,
+    theory            TEXT NOT NULL,
+    provider          TEXT NOT NULL DEFAULT 'openai',
+    model             TEXT,
+    adaptive_routing  INTEGER NOT NULL DEFAULT 1,
+    created_at        TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS students (
@@ -112,6 +113,10 @@ def _migrate(c) -> None:
         c.execute("ALTER TABLE classes ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'")
     if "model" not in cols:
         c.execute("ALTER TABLE classes ADD COLUMN model TEXT")
+    if "adaptive_routing" not in cols:
+        c.execute(
+            "ALTER TABLE classes ADD COLUMN adaptive_routing INTEGER NOT NULL DEFAULT 1"
+        )
 
 
 # ─── Teachers ──────────────────────────────────────────────────────────────
@@ -144,15 +149,17 @@ def create_class(
     theory: str,
     provider: str,
     model: str | None = None,
+    adaptive_routing: bool = True,
 ) -> dict:
     session_code = secrets.token_urlsafe(4).upper().replace("_", "").replace("-", "")[:8]
     with connect() as c:
         cur = c.execute(
             "INSERT INTO classes (teacher_email, name, session_code, topic, theory, "
-            "provider, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "provider, model, adaptive_routing, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 teacher_email.lower(), name, session_code, topic, theory,
-                provider, model or None, _now(),
+                provider, model or None, int(bool(adaptive_routing)), _now(),
             ),
         )
         return {"id": cur.lastrowid, "session_code": session_code}

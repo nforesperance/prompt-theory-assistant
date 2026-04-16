@@ -166,7 +166,7 @@ def render_create_class(teacher_email: str):
     with st.form("create_class"):
         name = st.text_input("Class name (e.g. 'Math 7B')")
         topic = st.text_input("Topic for this session (e.g. 'Pythagorean theorem')")
-        theory = st.selectbox("Teaching theory", theories)
+        theory = st.selectbox("Starting teaching theory", theories)
         col_p, col_m = st.columns(2)
         with col_p:
             provider = st.selectbox("Model provider", providers, index=default_idx)
@@ -175,6 +175,16 @@ def render_create_class(teacher_email: str):
                 "Model (optional — blank uses provider default)",
                 placeholder="e.g. gpt-4.1, claude-sonnet-4-5",
             )
+        adaptive_routing = st.toggle(
+            "Enable adaptive theory switching",
+            value=True,
+            help=(
+                "When ON, the tutor may switch to a different pedagogical theory "
+                "mid-session based on the learner's state (frustration, stuckness, "
+                "etc.). When OFF, the tutor stays on the starting theory for the "
+                "entire session."
+            ),
+        )
         st.caption(
             "Students will use whichever provider and model you pick here for their whole session."
         )
@@ -191,7 +201,8 @@ def render_create_class(teacher_email: str):
             )
             return
         result = storage.create_class(
-            teacher_email, name, topic, theory, provider, model.strip() or None
+            teacher_email, name, topic, theory, provider,
+            model.strip() or None, adaptive_routing,
         )
         st.success(f"Class created. Session code: **{result['session_code']}**")
         st.rerun()
@@ -199,11 +210,20 @@ def render_create_class(teacher_email: str):
 
 def render_class_detail(cls: dict):
     st.markdown(f"### {cls['name']}")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Session code", cls["session_code"])
-    c2.metric("Theory", cls["theory"])
-    c3.metric("Topic", cls["topic"] or "—")
-    c4.metric("Model", f"{cls['provider']} / {cls.get('model') or 'default'}")
+
+    model_str = f"{cls['provider']} / {cls.get('model') or 'default'}"
+    adaptive_str = "ON" if cls.get("adaptive_routing", 1) else "OFF"
+    rows = [
+        ("Session code", f"`{cls['session_code']}`"),
+        ("Theory", cls["theory"]),
+        ("Topic", cls["topic"] or "—"),
+        ("Model", model_str),
+        ("Adaptive routing", adaptive_str),
+    ]
+    for label, value in rows:
+        lcol, vcol = st.columns([1, 4])
+        lcol.caption(label)
+        vcol.markdown(value)
 
     st.divider()
 
