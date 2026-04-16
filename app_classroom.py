@@ -27,6 +27,7 @@ _BRIDGED_SECRETS = list(ENV_KEYS.values()) + [
     "SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY",
     "SUPABASE_KEY",
+    "DISABLE_TEACHER_SIGNUP",
 ]
 for _env_var in _BRIDGED_SECRETS:
     if _env_var not in os.environ:
@@ -59,6 +60,13 @@ def load_theory_prompt(theory: str) -> str:
     return (PROMPTS_DIR / theory / "system_prompt.md").read_text(encoding="utf-8")
 
 
+def teacher_signup_disabled() -> bool:
+    """Hide the teacher self-signup form when this env/secret is truthy."""
+    return os.environ.get("DISABLE_TEACHER_SIGNUP", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def get_llm(provider_name: str, model: str | None = None):
     env_key = ENV_KEYS.get(provider_name)
     if env_key and not os.environ.get(env_key):
@@ -73,10 +81,10 @@ def get_llm(provider_name: str, model: str | None = None):
 # ─── Landing / role selection ──────────────────────────────────────────────
 
 def render_landing():
-    st.title("🎓 Teaching Assistant — Classroom")
-    st.caption("Theory-grounded tutoring for classroom pilots.")
+    st.title("🎓 Assistant Pédagogique — Classe")
+    st.caption("Tutorat fondé sur des théories pédagogiques pour les pilotes en classe.")
 
-    tab_teacher, tab_student = st.tabs(["I'm a teacher", "I'm a student"])
+    tab_teacher, tab_student = st.tabs(["Je suis enseignant", "Je suis élève"])
 
     with tab_teacher:
         render_teacher_login()
@@ -86,43 +94,46 @@ def render_landing():
 
 
 def render_teacher_login():
-    st.subheader("Teacher sign-in")
+    st.subheader("Connexion enseignant")
     with st.form("teacher_login"):
-        email = st.text_input("School email")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Sign in")
+        email = st.text_input("E-mail scolaire")
+        password = st.text_input("Mot de passe", type="password")
+        submitted = st.form_submit_button("Se connecter")
     if submitted:
         if auth.login_teacher(email, password):
             st.rerun()
         else:
-            st.error("Invalid email or password.")
+            st.error("E-mail ou mot de passe invalide.")
 
-    with st.expander("Create teacher account (pilot signup)"):
+    if teacher_signup_disabled():
+        return
+
+    with st.expander("Créer un compte enseignant (inscription pilote)"):
         with st.form("teacher_signup"):
-            s_email = st.text_input("Email", key="su_email")
-            s_name = st.text_input("Full name", key="su_name")
-            s_pw = st.text_input("Password (min 8 chars)", type="password", key="su_pw")
-            s_submitted = st.form_submit_button("Create account")
+            s_email = st.text_input("E-mail", key="su_email")
+            s_name = st.text_input("Nom complet", key="su_name")
+            s_pw = st.text_input("Mot de passe (8 caractères min.)", type="password", key="su_pw")
+            s_submitted = st.form_submit_button("Créer le compte")
         if s_submitted:
             if len(s_pw) < 8:
-                st.error("Password must be at least 8 characters.")
+                st.error("Le mot de passe doit contenir au moins 8 caractères.")
             elif not s_email or not s_name:
-                st.error("Email and name are required.")
+                st.error("L'e-mail et le nom sont obligatoires.")
             else:
                 try:
                     storage.create_teacher(s_email, s_name, s_pw)
-                    st.success("Account created. Please sign in above.")
+                    st.success("Compte créé. Veuillez vous connecter ci-dessus.")
                 except Exception as e:
-                    st.error(f"Could not create account: {e}")
+                    st.error(f"Impossible de créer le compte : {e}")
 
 
 def render_student_login():
-    st.subheader("Student sign-in")
-    st.caption("Ask your teacher for the session code.")
+    st.subheader("Connexion élève")
+    st.caption("Demandez le Tutor Id à votre enseignant.")
     with st.form("student_login"):
-        code = st.text_input("Session code").upper()
-        sid = st.text_input("Your student ID")
-        submitted = st.form_submit_button("Join session")
+        code = st.text_input("Tutor Id").upper()
+        sid = st.text_input("Votre identifiant élève")
+        submitted = st.form_submit_button("Rejoindre la session")
     if submitted:
         err = auth.login_student(code, sid)
         if err:
@@ -155,7 +166,7 @@ def render_teacher():
     if created:
         st.success(
             f"✅ Class **{created['name']}** created. "
-            f"Session code: **`{created['session_code']}`**"
+            f"Tutor Id: **`{created['session_code']}`**"
         )
 
     # Programmatic view control — unlike st.tabs, this can be flipped
@@ -196,7 +207,7 @@ def render_my_classes(teacher_email: str):
                 default_idx = i
                 break
 
-    names = [f"{c['name']}  ·  code: {c['session_code']}" for c in classes]
+    names = [f"{c['name']}  ·  Tutor Id: {c['session_code']}" for c in classes]
     idx = st.selectbox(
         "Select a class",
         range(len(classes)),
@@ -257,7 +268,7 @@ def render_create_class(teacher_email: str):
             teacher_email, name, topic, theory, provider,
             model.strip() or None, adaptive_routing,
         )
-        st.toast(f"Class '{name}' created — code {result['session_code']}", icon="✅")
+        st.toast(f"Class '{name}' created — Tutor Id {result['session_code']}", icon="✅")
         st.session_state["class_created"] = {
             "name": name,
             "session_code": result["session_code"],
@@ -278,7 +289,7 @@ def render_class_detail(cls: dict, teacher_email: str):
     model_str = f"{cls['provider']} / {cls.get('model') or 'default'}"
     adaptive_str = "ON" if cls.get("adaptive_routing", 1) else "OFF"
     rows = [
-        ("Session code", f"`{cls['session_code']}`"),
+        ("Tutor Id", f"`{cls['session_code']}`"),
         ("Theory", cls["theory"]),
         ("Topic", cls["topic"] or "—"),
         ("Model", model_str),
@@ -309,7 +320,7 @@ def render_delete_class_button(cls: dict, teacher_email: str) -> None:
             "This cannot be undone."
         )
         confirm_label = st.text_input(
-            "Type the session code to confirm",
+            "Type the Tutor Id to confirm",
             key=f"del_confirm_{cls['id']}",
             placeholder=cls["session_code"],
         )

@@ -1,11 +1,11 @@
-student_id,display_name
-P1,Etudiant 1
-P2,Etudiant 2
-P3,Etudiant 3
-P4,Etudiant 4
-P5,Etudiant 5
-P6,Etudiant 6
-P7,Etudiant 7
-P8,Etudiant 8
-P9,Etudiant 9
-P10,Etudiant 10
+student_id,display_name,language
+P1,Etudiant 1,fr
+P2,Etudiant 2,fr
+P3,Etudiant 3,fr
+P4,Etudiant 4,fr
+P5,Etudiant 5,fr
+P6,Etudiant 6,fr
+P7,Etudiant 7,fr
+P8,Etudiant 8,fr
+P9,Etudiant 9,fr
+P10,Etudiant 10,fr
