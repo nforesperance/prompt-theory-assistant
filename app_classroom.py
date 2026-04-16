@@ -584,7 +584,7 @@ def render_session_locked(a: dict, evaluation: dict, eval_count: int) -> None:
     remaining = STUDY_REQUIRED_SESSIONS - eval_count
     st.title("Évaluation enregistrée ✅")
     st.success(
-        f"Merci {a['display_name'].split()[0]} ! Vous avez évalué "
+        f"Merci! Vous avez évalué "
         f"**{eval_count}/{STUDY_REQUIRED_SESSIONS}** sessions."
     )
     if remaining > 0:
