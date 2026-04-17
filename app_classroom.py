@@ -544,7 +544,7 @@ def render_evaluation_form(orch: ClassroomOrchestrator, cls: dict, a: dict) -> N
             "ce tuteur pour un problème similaire.",
             1, 7, 4,
         )
-        notes = st.text_area("Notes brèves (facultatif)", height=100)
+        notes = st.text_area("Notes brèves", height=100)
 
         col_cancel, col_submit = st.columns([1, 2])
         with col_cancel:
@@ -617,7 +617,7 @@ def render_final_questions(a: dict) -> None:
             height=200,
         )
         standout = st.text_area(
-            "Un tuteur particulièrement utile ou frustrant ? (facultatif)",
+            "Un tuteur vous a t'ìl particulièrement été utile ou frustrant ?",
             height=150,
         )
         submit = st.form_submit_button(
