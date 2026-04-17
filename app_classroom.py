@@ -613,11 +613,11 @@ def render_final_questions(a: dict) -> None:
 
     with st.form("final_questions"):
         differences = st.text_area(
-            "Quelles différences avez-vous remarquées entre les quatre tuteurs ?",
+            "Quelles différences avez-vous remarquées entre les quatre tuteurs ?. Commenter en quelques lignes",
             height=200,
         )
         standout = st.text_area(
-            "Un tuteur vous a t'ìl particulièrement été utile ou frustrant ?",
+            "Un tuteur vous a t'ìl particulièrement été utile ou frustrant ?. Commenter en quelques lignes",
             height=150,
         )
         submit = st.form_submit_button(
