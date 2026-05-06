@@ -386,3 +386,19 @@ def submit_final_response(
             "standout": standout or None,
         }
     ).execute()
+
+
+def list_final_responses_for_students(student_ids: list[str]) -> list[dict]:
+    """Final-questionnaire rows for the given student ids. Used to attach
+    each participant's open-ended answers to a teacher's class export."""
+    if not student_ids:
+        return []
+    sb = _get_client()
+    res = (
+        sb.table("final_responses")
+        .select("*")
+        .in_("student_id", student_ids)
+        .order("submitted_at", desc=True)
+        .execute()
+    )
+    return res.data or []

@@ -302,7 +302,9 @@ def render_class_detail(cls: dict, teacher_email: str):
 
     st.divider()
 
-    sub_roster, sub_sessions = st.tabs(["Roster", "Student sessions"])
+    sub_roster, sub_sessions, sub_evals = st.tabs(
+        ["Roster", "Student sessions", "Evaluations"]
+    )
 
     with sub_roster:
         render_roster_upload(cls["id"])
@@ -310,6 +312,9 @@ def render_class_detail(cls: dict, teacher_email: str):
 
     with sub_sessions:
         render_sessions_list(cls["id"])
+
+    with sub_evals:
+        render_class_evaluations(cls)
 
 
 def render_delete_class_button(cls: dict, teacher_email: str) -> None:
@@ -403,6 +408,82 @@ def render_sessions_list(class_id: int):
         with col2:
             st.markdown("**Learner state**")
             st.json(session["state"])
+
+
+def render_class_evaluations(cls: dict):
+    """Likert evaluations and final open-ended responses for this class,
+    shown as tables with CSV download buttons."""
+    evals = storage.list_evaluations_for_class(cls["id"])
+    if not evals:
+        st.info("No evaluations submitted for this class yet.")
+        return
+
+    roster_lookup = {
+        s["student_id"]: s["display_name"]
+        for s in storage.list_roster(cls["id"])
+    }
+    for r in evals:
+        r["display_name"] = roster_lookup.get(r["student_id"], "")
+        r["class_name"] = cls["name"]
+        r["session_code"] = cls["session_code"]
+        r["theory"] = cls["theory"]
+        r["topic"] = cls.get("topic")
+
+    eval_df = pd.DataFrame(evals)
+    preferred = [
+        "submitted_at", "student_id", "display_name", "session_code",
+        "class_name", "theory", "topic",
+        "coherence", "made_me_think", "one_at_a_time", "reuse",
+        "notes", "session_id", "class_id",
+    ]
+    cols = [c for c in preferred if c in eval_df.columns] + [
+        c for c in eval_df.columns if c not in preferred
+    ]
+    eval_df = eval_df[cols]
+
+    st.markdown(f"#### Likert evaluations · {len(eval_df)} submission(s)")
+    st.dataframe(eval_df, width="stretch", hide_index=True)
+    st.download_button(
+        "Download evaluations (CSV)",
+        data=eval_df.to_csv(index=False).encode("utf-8"),
+        file_name=f"evaluations_{cls['session_code']}.csv",
+        mime="text/csv",
+        type="primary",
+    )
+
+    student_ids = sorted({r["student_id"] for r in evals})
+    finals = storage.list_final_responses_for_students(student_ids)
+
+    st.divider()
+    st.markdown("#### Final open-ended responses")
+    if not finals:
+        st.caption(
+            "None yet — the final questionnaire appears once a student "
+            f"completes {STUDY_REQUIRED_SESSIONS} evaluated sessions."
+        )
+        return
+
+    for r in finals:
+        r["display_name"] = roster_lookup.get(r["student_id"], "")
+    finals_df = pd.DataFrame(finals)
+    finals_preferred = [
+        "submitted_at", "student_id", "display_name",
+        "differences", "standout",
+    ]
+    finals_cols = [c for c in finals_preferred if c in finals_df.columns] + [
+        c for c in finals_df.columns if c not in finals_preferred
+    ]
+    finals_df = finals_df[finals_cols]
+    st.caption(
+        f"{len(finals_df)} student(s) from this class have completed the study."
+    )
+    st.dataframe(finals_df, width="stretch", hide_index=True)
+    st.download_button(
+        "Download final responses (CSV)",
+        data=finals_df.to_csv(index=False).encode("utf-8"),
+        file_name=f"final_responses_{cls['session_code']}.csv",
+        mime="text/csv",
+    )
 
 
 # ─── Student chat ──────────────────────────────────────────────────────────
